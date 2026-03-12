@@ -1,9 +1,13 @@
 use either::Either::{self, Left, Right};
-use proc_macro2::TokenStream;
+use proc_macro2::{Spacing, TokenStream, TokenTree};
 use quote::{format_ident, quote};
 use syn::{
-    Expr, ExprCall, ExprMethodCall, Ident, Pat, Token, braced, parenthesized, parse::Parse,
-    parse_quote, parse_quote_spanned, punctuated::Punctuated, spanned::Spanned, token,
+    Expr, ExprBlock, ExprCall, ExprMethodCall, Ident, Pat, Path, Token, braced, parenthesized,
+    parse::{Parse, ParseBuffer, discouraged::Speculative},
+    parse_quote, parse_quote_spanned, parse2,
+    punctuated::Punctuated,
+    spanned::Spanned,
+    token,
 };
 
 mod kw {
@@ -12,6 +16,9 @@ mod kw {
     syn::custom_keyword!(UPDATE);
     syn::custom_keyword!(ON);
     syn::custom_keyword!(KEY);
+    syn::custom_keyword!(BIND);
+    syn::custom_keyword!(BODY);
+    syn::custom_keyword!(ARGS);
 }
 
 pub struct Block {
@@ -26,8 +33,8 @@ pub enum BlockElem {
     Update(Punctuated<Assignment, Token![,]>),
     On(Punctuated<Assignment, Token![,]>),
     Code(TokenStream),
-    Call(ExprCall),
-    MethodCall(ExprMethodCall),
+    Call(ExprCall, Option<Punctuated<Pat, Token![,]>>, Block),
+    MethodCall(ExprMethodCall, Option<Punctuated<Pat, Token![,]>>, Block),
     If(IfElem),
     For {
         pat: Pat,
@@ -35,6 +42,8 @@ pub enum BlockElem {
         key: Expr,
         body: Block,
     },
+    Body(Punctuated<Expr, Token![,]>),
+    // Bind(Ident),
 }
 pub struct IfElem {
     cond: Expr,
@@ -78,7 +87,7 @@ impl Parse for IfElem {
 impl Parse for Assignment {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         let name;
-        let theme = if input.peek(kw::theme) {
+        let theme = if input.peek(kw::theme) && input.peek2(token::Paren) {
             input.parse::<kw::theme>()?;
             let inner;
             parenthesized!(inner in input);
@@ -111,7 +120,7 @@ impl Parse for BlockElem {
             Ok(elem)
             //
         } else if input.peek(kw::INIT) {
-            input.parse::<Ident>()?;
+            input.parse::<kw::INIT>()?;
             let inner;
             parenthesized!(inner in input);
             let elem = BlockElem::Init(Punctuated::parse_terminated(&inner)?);
@@ -119,7 +128,7 @@ impl Parse for BlockElem {
             Ok(elem)
             //
         } else if input.peek(kw::UPDATE) {
-            input.parse::<Ident>()?;
+            input.parse::<kw::UPDATE>()?;
             let inner;
             parenthesized!(inner in input);
             let elem = BlockElem::Update(Punctuated::parse_terminated(&inner)?);
@@ -127,12 +136,30 @@ impl Parse for BlockElem {
             Ok(elem)
             //
         } else if input.peek(kw::ON) {
-            input.parse::<Ident>()?;
+            input.parse::<kw::ON>()?;
             let inner;
             parenthesized!(inner in input);
             let elem = BlockElem::On(Punctuated::parse_terminated(&inner)?);
             input.parse::<Token![;]>()?;
             Ok(elem)
+            //
+        }
+        // else if input.peek(kw::BIND) {
+        //     input.parse::<kw::BIND>()?;
+        //     let inner;
+        //     parenthesized!(inner in input);
+        //     let var = inner.parse()?;
+        //     input.parse::<Token![;]>()?;
+        //     Ok(BlockElem::Bind(var))
+        //     //
+        // }
+        else if input.peek(kw::BODY) {
+            input.parse::<kw::BODY>()?;
+            let inner;
+            parenthesized!(inner in input);
+            let args = Punctuated::parse_terminated(&inner)?;
+            input.parse::<Token![;]>()?;
+            Ok(BlockElem::Body(args))
             //
         } else if input.peek(token::Brace) {
             let inner;
@@ -169,24 +196,80 @@ impl Parse for BlockElem {
                 body,
             })
         } else {
-            let expr = input.parse::<Expr>()?;
+            let mut toks = vec![];
+            input.step(|cursor| {
+                let mut rest = *cursor;
+                let mut found_first = false;
+                while let Some((tt, next)) = rest.token_tree() {
+                    toks.push(tt.clone());
+                    match &tt {
+                        TokenTree::Punct(punct) if punct.as_char() == '.' => {
+                            if found_first {
+                                toks.pop();
+                                toks.pop();
+                                return Ok(((), next));
+                            }
+                            if punct.spacing() == Spacing::Joint {
+                                found_first = true
+                            }
+                        }
+                        _ => {
+                            found_first = false;
+                        }
+                    }
+                    rest = next
+                }
+                Err(cursor.error("bad0"))
+            })?;
+
+            let mut left = TokenStream::new();
+            left.extend(toks);
+            let expr = parse2::<Expr>(left)?;
+
+            let parse_args =
+                |binput: &ParseBuffer| -> Result<Option<Punctuated<Pat, Token![,]>>, syn::Error> {
+                    Ok(if binput.peek(Token![let]) {
+                        binput.parse::<Token![let]>()?;
+                        let inner2;
+                        parenthesized!(inner2 in binput);
+                        let args =
+                            Punctuated::parse_terminated_with(&inner2, |i| Pat::parse_single(i))?;
+                        binput.parse::<Token![=]>()?;
+                        binput.parse::<kw::ARGS>()?;
+                        binput.parse::<Token![;]>()?;
+                        Some(args)
+                    } else {
+                        None
+                    })
+                };
             let elem = match expr {
                 Expr::Call(mut expr_call) => {
                     expr_call.args.insert(
                         0,
-                        parse_quote_spanned!(expr_call.func.span() => __builder.__upcast()),
+                        parse_quote_spanned!(expr_call.func.span() => __builder.upcast()),
                     );
-                    BlockElem::Call(expr_call)
+                    let inner;
+                    braced!(inner in input);
+                    let args = parse_args(&inner)?;
+                    let block = inner.parse()?;
+
+                    BlockElem::Call(expr_call, args, block)
                 }
                 Expr::MethodCall(mut expr_method_call) => {
                     expr_method_call.args.insert(
                         0,
-                        parse_quote_spanned!(expr_method_call.receiver.span() => __builder.__upcast()),
+                        parse_quote_spanned!(expr_method_call.receiver.span() => __builder.upcast()),
                     );
-                    BlockElem::MethodCall(expr_method_call)
+                    let inner;
+                    braced!(inner in input);
+                    let args = parse_args(&inner)?;
+                    let block = inner.parse()?;
+
+                    BlockElem::MethodCall(expr_method_call, args, block)
                 }
-                _ => panic!("bad"),
+                _ => panic!("bad1"),
             };
+
             input.parse::<Token![;]>()?;
             Ok(elem)
             //
@@ -206,17 +289,17 @@ impl Parse for Block {
 pub fn gen_block(block: Block) -> TokenStream {
     let mut out = quote! {};
     for i in block.elems {
-        let gen_init_or_update = |i: Assignment, update: bool| -> TokenStream {
+        let gen_init_or_update = |i: Assignment| -> TokenStream {
             let name = i.name;
             let value = i.value;
             if let Some(theme) = i.theme {
-                let func = format_ident!("__set_{}_override", theme);
+                let func = format_ident!("__set_theme_{}_override", theme);
                 quote! {
-                    let __builder = __builder.#func(stringify!(#name), #value, #update);
+                    __builder = __builder.#func(stringify!(#name), #value);
                 }
             } else {
                 quote! {
-                    let __builder = __builder.__set_prop(stringify!(#name), #value, #update);
+                    __builder = __builder.__set_prop(stringify!(#name), #value);
                 }
             }
         };
@@ -224,58 +307,92 @@ pub fn gen_block(block: Block) -> TokenStream {
             BlockElem::Node { name, body } => {
                 let body = gen_block(body);
                 out.extend(quote! {
-                    let __builder = __builder.__child::<#name>(|__builder| {
+                    __builder = __builder.__child::<#name>(|mut __builder| {
                         #body
                     });
                 });
             }
             BlockElem::Init(list) => {
+                let mut inner = quote! {};
                 for i in list {
-                    out.extend(gen_init_or_update(i, false));
+                    inner.extend(gen_init_or_update(i));
                 }
+                out.extend(quote! {
+                    if __builder.init() {
+                        #inner
+                    }
+                });
             }
             BlockElem::Update(list) => {
                 for i in list {
-                    out.extend(gen_init_or_update(i, true));
+                    out.extend(gen_init_or_update(i));
                 }
             }
             BlockElem::On(list) => {
                 for i in list {
                     if i.theme.is_some() {
-                        panic!("bad");
+                        panic!("bad2");
                     }
                     let name = i.name;
                     let value = i.value;
                     out.extend(quote! {
-                        let __builder = __builder.__signal(stringify!(#name), #value);
+                        __builder = __builder.__signal(stringify!(#name), #value);
                     });
                 }
             }
             BlockElem::Code(block) => {
                 out.extend(quote! { #block });
             }
-            BlockElem::Call(expr_call) => {
+            BlockElem::Call(mut expr_call, args, block) => {
+                let block = gen_block(block);
+                let args = args
+                    .map(|mut args| {
+                        if !args.empty_or_trailing() {
+                            args.push_punct(parse_quote! {,});
+                        };
+                        quote! { (#args) }
+                    })
+                    .unwrap_or_else(|| quote! {_});
+                expr_call.args.push(
+                    parse_quote_spanned!(expr_call.func.span() => &mut |mut __builder, #args| {
+                        #block
+                    }),
+                );
                 out.extend(quote! {
-                    let __builder = (#expr_call).__cast();
+                    __builder = (#expr_call).cast();
                 });
             }
-            BlockElem::MethodCall(expr_method_call) => {
+            BlockElem::MethodCall(mut expr_method_call, args, block) => {
+                let block = gen_block(block);
+                let args = args
+                    .map(|mut args| {
+                        if !args.empty_or_trailing() {
+                            args.push_punct(parse_quote! {,});
+                        };
+                        quote! { (#args) }
+                    })
+                    .unwrap_or_else(|| quote! {_});
+                expr_method_call.args.push(
+                    parse_quote_spanned!(expr_method_call.receiver.span() => &mut |mut __builder, #args| {
+                        #block
+                    }),
+                );
                 out.extend(quote! {
-                    let __builder = (#expr_method_call).__cast();
+                    __builder = (#expr_method_call).cast();
                 });
             }
             BlockElem::If(if_elem) => {
                 let mut current = Some(if_elem);
                 let mut idx = 0u64;
                 out.extend(quote! {
-                    let __builder =
+                    __builder =
                 });
                 while let Some(if_elem) = current.take() {
                     let cond = if_elem.cond;
                     let body = gen_block(if_elem.body);
                     out.extend(quote! {
                         if #cond {
-                            __builder.__under_explicit(#idx, |__builder| {
+                            __builder.__under_explicit(#idx, |mut __builder| {
                                 #body
                             })
                         }
@@ -290,7 +407,7 @@ pub fn gen_block(block: Block) -> TokenStream {
                             idx += 1;
                             let body = gen_block(remaining);
                             out.extend(quote! { else {
-                                __builder.__under_explicit(#idx, |__builder| {
+                                __builder.__under_explicit(#idx, |mut __builder| {
                                     #body
                                 })
                             } });
@@ -312,16 +429,26 @@ pub fn gen_block(block: Block) -> TokenStream {
             } => {
                 let body = gen_block(body);
                 out.extend(quote! {
-                    let mut __builder = __builder;
-
                     for #pat in #iter {
-                        __builder = __builder.__under_explicit(#key, |__builder| {
+                        __builder = __builder.__under_explicit(#key, |mut __builder| {
                             #body
                         });
                     }
                 });
                 //
             }
+            BlockElem::Body(mut args) => {
+                if !args.empty_or_trailing() {
+                    args.push_punct(parse_quote! {,});
+                }
+                out.extend(quote! {
+                    __builder = __body(__builder.upcast(), (#args)).cast();
+                });
+            } // BlockElem::Bind(ident) => {
+              //     out.extend(quote! {
+              //         #ident.init(__builder.__node());
+              //     });
+              // }
         }
     }
     out.extend(quote! { __builder });

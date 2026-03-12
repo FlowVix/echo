@@ -1,9 +1,11 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{
-    Attribute, FnArg, Ident, PatIdent, PatType, Path, Result, Signature, Visibility,
+    Attribute, FnArg, Ident, PatIdent, PatType, Path, Result, Signature, Token, Type, Visibility,
+    parenthesized,
     parse::{Parse, ParseStream},
     parse_macro_input, parse_quote,
+    punctuated::Punctuated,
 };
 
 use crate::tree::{Block, gen_block};
@@ -36,12 +38,29 @@ impl Parse for RawFn {
     }
 }
 
+struct TreeAttr {
+    btype: Path,
+    args: Punctuated<Type, Token![,]>,
+}
+impl Parse for TreeAttr {
+    fn parse(input: ParseStream) -> Result<Self> {
+        let btype = input.parse()?;
+        let inner;
+        parenthesized!(inner in input);
+        let args = Punctuated::parse_terminated(&inner)?;
+        Ok(TreeAttr { btype, args })
+    }
+}
+
 #[proc_macro_attribute]
 pub fn tree(
     attr: proc_macro::TokenStream,
     item: proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
-    let mut btype = parse_macro_input!(attr as Path);
+    let TreeAttr { btype, mut args } = parse_macro_input!(attr as TreeAttr);
+    if !args.empty_or_trailing() {
+        args.push_punct(parse_quote! {,});
+    }
     let mut func = parse_macro_input!(item as RawFn);
 
     let has_self = !func.sig.inputs.is_empty() && matches!(func.sig.inputs[0], FnArg::Receiver(_));
@@ -49,12 +68,18 @@ pub fn tree(
         if has_self { 1 } else { 0 },
         FnArg::Typed(PatType {
             attrs: vec![],
-            pat: parse_quote!(__builder),
+            pat: parse_quote!(mut __builder),
             colon_token: parse_quote!(:),
-            ty: parse_quote!(::echo::Builder<#btype>),
+            ty: parse_quote!(::echo::Builder<::godot::classes::Node>),
         }),
     );
-    func.sig.output = parse_quote!(-> ::echo::Builder<#btype>);
+    func.sig.inputs.push(FnArg::Typed(PatType {
+        attrs: vec![],
+        pat: parse_quote!(__body),
+        colon_token: parse_quote!(:),
+        ty: parse_quote!(&mut dyn FnMut(::echo::Builder<#btype>, (#args)) -> ::echo::Builder<#btype>),
+    }));
+    func.sig.output = parse_quote!(-> ::echo::Builder<::godot::classes::Node>);
 
     let attrs = func.attrs;
     let vis = func.vis;

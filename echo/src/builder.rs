@@ -21,9 +21,9 @@ use smallvec::{SmallVec, smallvec};
 use crate::app::{Context, MapItem};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct PathElem {
-    pub(crate) inc: u64,
-    pub(crate) sub: u64,
+pub enum PathElem {
+    Inc(u64),
+    Hash(u64),
 }
 
 pub struct Builder<P: Inherits<Node>> {
@@ -48,10 +48,7 @@ impl<P: Inherits<Node>> Builder<P> {
         cb: impl FnOnce(Builder<C>) -> Builder<C>,
     ) -> Builder<P> {
         let mut path = self.path;
-        path.push(PathElem {
-            inc: self.next_push,
-            sub: 0,
-        });
+        path.push(PathElem::Inc(self.next_push));
         self.next_push += 1;
 
         let mut ctx_b = self.ctx.borrow_mut();
@@ -62,6 +59,7 @@ impl<P: Inherits<Node>> Builder<P> {
         let child_b = match ctx_b.map.get(&cached_total_id) {
             Some(existing) => {
                 let existing = existing.node.clone().cast::<C>();
+                self.node.upcast_mut().move_child(&existing, self.next_idx);
                 self.next_idx = existing.upcast_ref().get_index() + 1;
                 Builder {
                     node: existing,
@@ -108,11 +106,9 @@ impl<P: Inherits<Node>> Builder<P> {
     #[doc(hidden)]
     pub fn __under_explicit(mut self, id: impl Hash, cb: impl FnOnce(Self) -> Self) -> Self {
         let mut path = self.path;
-        path.push(PathElem {
-            inc: self.next_push,
-            sub: ahash::RandomState::with_seeds(1, 2, 3, 4).hash_one(&id),
-        });
-        self.next_push += 1;
+        path.push(PathElem::Hash(
+            ahash::RandomState::with_seeds(1, 2, 3, 4).hash_one(&id),
+        ));
 
         let cached_total_id = ahash::RandomState::with_seeds(1, 2, 3, 4).hash_one(&path);
 
@@ -126,7 +122,6 @@ impl<P: Inherits<Node>> Builder<P> {
             ctx: self.ctx,
         });
         inner_b.path.pop();
-        // std::mem::discriminant(Some(3)).
 
         self.path = inner_b.path;
         self.node = inner_b.node;
@@ -136,14 +131,13 @@ impl<P: Inherits<Node>> Builder<P> {
     }
     #[inline]
     #[doc(hidden)]
-    pub fn __set_prop<T: ToGodot>(mut self, prop: &str, value: T, update: bool) -> Self {
-        if self.new || update {
-            self.node.upcast_mut().set(prop, &value.to_variant());
-        }
+    pub fn __set_prop<T: ToGodot>(mut self, prop: &str, value: T) -> Self {
+        self.node.upcast_mut().set(prop, &value.to_variant());
         self
     }
     #[inline]
     #[doc(hidden)]
+    #[track_caller]
     pub fn __signal(mut self, s: &'static str, cb: impl FnOnce(&[Variant])) -> Self {
         let mut ctx = self.ctx.borrow_mut();
         ctx.used_signals.insert((self.cached_total_id, s));
@@ -170,7 +164,6 @@ impl<P: Inherits<Node>> Builder<P> {
                     .emit_signal("__echo_rerun", &[]);
                 },
             );
-            godot_print!("cpmmected");
             self.node.upcast_mut().connect(s, &callable);
 
             ctx.map
@@ -193,8 +186,7 @@ impl<P: Inherits<Node>> Builder<P> {
         }
     }
     #[inline]
-    #[doc(hidden)]
-    pub fn __cast<T: Inherits<Node> + Inherits<P>>(self) -> Builder<T>
+    pub fn cast<T: Inherits<Node> + Inherits<P>>(self) -> Builder<T>
 // where
     //     P: Inherits<T>,
     //     T: Inherits<Node>,
@@ -210,8 +202,7 @@ impl<P: Inherits<Node>> Builder<P> {
         }
     }
     #[inline]
-    #[doc(hidden)]
-    pub fn __upcast<T: Inherits<Node>>(self) -> Builder<T>
+    pub fn upcast<T: Inherits<Node>>(self) -> Builder<T>
     where
         P: Inherits<T>,
     {
@@ -225,27 +216,33 @@ impl<P: Inherits<Node>> Builder<P> {
             ctx: self.ctx,
         }
     }
+    #[inline]
+    pub fn node(&self) -> Gd<P> {
+        self.node.clone()
+    }
+    #[inline]
+    pub fn init(&self) -> bool {
+        self.new
+    }
 }
 
 impl<P: Inherits<Control> + Inherits<Node>> Builder<P> {
     #[inline]
     #[doc(hidden)]
-    pub fn __set_theme_color_override(mut self, prop: &str, value: Color, update: bool) -> Self {
-        if self.new || update {
-            self.node
-                .upcast_mut::<Control>()
-                .add_theme_color_override(prop, value);
-        }
+    pub fn __set_theme_color_override(mut self, prop: &str, value: Color) -> Self {
+        self.node
+            .upcast_mut::<Control>()
+            .add_theme_color_override(prop, value);
+
         self
     }
     #[inline]
     #[doc(hidden)]
-    pub fn __set_theme_constant_override(mut self, prop: &str, value: i32, update: bool) -> Self {
-        if self.new || update {
-            self.node
-                .upcast_mut::<Control>()
-                .add_theme_constant_override(prop, value);
-        }
+    pub fn __set_theme_constant_override(mut self, prop: &str, value: i32) -> Self {
+        self.node
+            .upcast_mut::<Control>()
+            .add_theme_constant_override(prop, value);
+
         self
     }
     #[inline]
@@ -254,23 +251,20 @@ impl<P: Inherits<Control> + Inherits<Node>> Builder<P> {
         mut self,
         prop: &str,
         value: impl AsArg<Gd<godot::classes::Font>>,
-        update: bool,
     ) -> Self {
-        if self.new || update {
-            self.node
-                .upcast_mut::<Control>()
-                .add_theme_font_override(prop, value);
-        }
+        self.node
+            .upcast_mut::<Control>()
+            .add_theme_font_override(prop, value);
+
         self
     }
     #[inline]
     #[doc(hidden)]
-    pub fn __set_theme_font_size_override(mut self, prop: &str, value: i32, update: bool) -> Self {
-        if self.new || update {
-            self.node
-                .upcast_mut::<Control>()
-                .add_theme_font_size_override(prop, value);
-        }
+    pub fn __set_theme_font_size_override(mut self, prop: &str, value: i32) -> Self {
+        self.node
+            .upcast_mut::<Control>()
+            .add_theme_font_size_override(prop, value);
+
         self
     }
     #[inline]
@@ -279,13 +273,11 @@ impl<P: Inherits<Control> + Inherits<Node>> Builder<P> {
         mut self,
         prop: &str,
         value: impl AsArg<Gd<godot::classes::Texture2D>>,
-        update: bool,
     ) -> Self {
-        if self.new || update {
-            self.node
-                .upcast_mut::<Control>()
-                .add_theme_icon_override(prop, value);
-        }
+        self.node
+            .upcast_mut::<Control>()
+            .add_theme_icon_override(prop, value);
+
         self
     }
     #[inline]
@@ -294,13 +286,11 @@ impl<P: Inherits<Control> + Inherits<Node>> Builder<P> {
         mut self,
         prop: &str,
         value: impl AsArg<Gd<godot::classes::StyleBox>>,
-        update: bool,
     ) -> Self {
-        if self.new || update {
-            self.node
-                .upcast_mut::<Control>()
-                .add_theme_stylebox_override(prop, value);
-        }
+        self.node
+            .upcast_mut::<Control>()
+            .add_theme_stylebox_override(prop, value);
+
         self
     }
 }
