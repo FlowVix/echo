@@ -42,6 +42,10 @@ pub enum BlockElem {
         key: Expr,
         body: Block,
     },
+    Match {
+        value: Expr,
+        arms: Vec<(Pat, Block)>,
+    },
     Body(Punctuated<Expr, Token![,]>),
     // Bind(Ident),
 }
@@ -195,6 +199,30 @@ impl Parse for BlockElem {
                 key,
                 body,
             })
+        } else if input.peek(Token![match]) {
+            input.parse::<Token![match]>()?;
+            let value = Expr::parse_without_eager_brace(input)?;
+
+            let inner;
+            braced!(inner in input);
+            let mut arms = vec![];
+            while !inner.is_empty() {
+                let pat = Pat::parse_multi_with_leading_vert(&inner)?;
+                inner.parse::<Token![=>]>()?;
+
+                let inner2;
+                braced!(inner2 in inner);
+                let block = inner2.parse()?;
+                if inner.peek(Token![,]) {
+                    inner.parse::<Token![,]>()?;
+                }
+                arms.push((pat, block));
+            }
+
+            if input.peek(Token![;]) {
+                input.parse::<Token![;]>()?;
+            }
+            Ok(BlockElem::Match { value, arms })
         } else {
             let mut toks = vec![];
             input.step(|cursor| {
@@ -444,11 +472,26 @@ pub fn gen_block(block: Block) -> TokenStream {
                 out.extend(quote! {
                     __builder = __body(__builder.upcast(), (#args)).cast();
                 });
-            } // BlockElem::Bind(ident) => {
-              //     out.extend(quote! {
-              //         #ident.init(__builder.__node());
-              //     });
-              // }
+            }
+            BlockElem::Match { value, arms } => {
+                let mut inner = quote! {};
+                for (idx, (pat, block)) in arms.into_iter().enumerate() {
+                    let body = gen_block(block);
+                    let idx = idx as u64;
+                    inner.extend(quote! {
+                        #pat => {
+                            __builder.__under_explicit(#idx, |mut __builder| {
+                                #body
+                            })
+                        },
+                    });
+                }
+                out.extend(quote! {
+                    __builder = match #value {
+                        #inner
+                    };
+                });
+            }
         }
     }
     out.extend(quote! { __builder });
