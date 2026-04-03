@@ -10,10 +10,9 @@ use std::{
 use godot::{
     classes::{Button, Control, Label, Node, VBoxContainer, control::SizeFlags},
     global::godot_warn,
-    meta::{AsArg, InParamTuple},
+    meta::AsArg,
     obj::{Gd, Inherits, NewAlloc, WithSignals},
     prelude::*,
-    register::TypedSignal,
 };
 use smallbox::SmallBox;
 use smallvec::{SmallVec, smallvec};
