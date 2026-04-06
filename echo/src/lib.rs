@@ -5,7 +5,7 @@ mod app;
 mod builder;
 
 pub use app::App;
-pub use builder::Builder;
+pub use builder::{Builder, PathElem};
 
 pub use echo_macro::tree;
 

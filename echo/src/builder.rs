@@ -250,6 +250,10 @@ impl<P: Inherits<Node>> Builder<P> {
         self.node.clone()
     }
     #[inline]
+    pub fn path(&self) -> Vec<PathElem> {
+        self.path.clone().into_vec()
+    }
+    #[inline]
     pub fn init(&self) -> bool {
         self.new
     }
