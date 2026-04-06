@@ -132,6 +132,8 @@ impl<P: Inherits<Node>> Builder<P> {
     #[doc(hidden)]
     pub fn __under_explicit(mut self, id: impl Hash, cb: impl FnOnce(Self) -> Self) -> Self {
         let mut path = self.path;
+        path.push(PathElem::Inc(self.next_push));
+        self.next_push += 1;
         path.push(PathElem::Hash(
             ahash::RandomState::with_seeds(1, 2, 3, 4).hash_one(&id),
         ));
@@ -147,6 +149,7 @@ impl<P: Inherits<Node>> Builder<P> {
             new: self.new,
             ctx: self.ctx,
         });
+        inner_b.path.pop();
         inner_b.path.pop();
 
         self.path = inner_b.path;
