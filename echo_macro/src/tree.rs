@@ -383,7 +383,8 @@ pub fn gen_block(block: Block) -> TokenStream {
             }
             BlockElem::State(name, init) => {
                 out.extend(quote! {
-                    (__builder, #name) = __builder.__state(#init);
+                    let (__new_builder, #name) = __builder.__state(#init);
+                    __builder = __new_builder;
                 });
             }
             BlockElem::Code(block) => {
