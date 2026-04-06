@@ -1,4 +1,4 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{any::Any, cell::RefCell, rc::Rc};
 
 use ahash::{AHashMap, AHashSet, HashMapExt, HashSetExt};
 use godot::{
@@ -21,6 +21,7 @@ pub struct Context {
     pub(crate) used_ids: IntSet<u64>,
     pub(crate) used_signals: AHashSet<(u64, &'static str)>,
     pub(crate) map: IntMap<u64, MapItem>,
+    pub(crate) state_map: IntMap<u64, Box<dyn Any>>,
     pub(crate) signal_runs: AHashMap<(Gd<Node>, &'static str), SmallVec<[Variant; 4]>>,
 }
 
@@ -28,6 +29,7 @@ pub struct App<R: Inherits<Node>, S> {
     pub(crate) root: Gd<R>,
     pub(crate) func: Box<dyn FnMut(Builder<R>, &mut S) -> Builder<R> + 'static>,
     pub(crate) ctx: Rc<RefCell<Context>>,
+    pub(crate) ran: bool,
 }
 
 impl<R: Inherits<Node>, S> App<R, S> {
@@ -40,12 +42,14 @@ impl<R: Inherits<Node>, S> App<R, S> {
             ctx: Rc::new(RefCell::new(Context {
                 used_ids: IntSet::new(),
                 map: IntMap::new(),
+                state_map: IntMap::new(),
                 signal_runs: AHashMap::new(),
                 root: root.clone().upcast(),
                 used_signals: AHashSet::new(),
             })),
             root,
             func: Box::new(func),
+            ran: false,
         }
     }
     pub fn run(&mut self, state: &mut S) {
@@ -62,13 +66,14 @@ impl<R: Inherits<Node>, S> App<R, S> {
                 node: self.root.clone(),
                 next_idx: 0,
                 ctx: self.ctx.clone(),
-                new: false,
+                new: !self.ran,
                 next_push: 0,
                 path,
                 cached_total_id,
             },
             state,
         );
+        self.ran = true;
         let ctx = &mut *self.ctx.borrow_mut();
         ctx.map.retain(|k, item| {
             if ctx.used_ids.contains(k) {
@@ -84,6 +89,7 @@ impl<R: Inherits<Node>, S> App<R, S> {
                 false
             }
         });
+        ctx.state_map.retain(|k, item| ctx.used_ids.contains(k));
         ctx.signal_runs.clear();
     }
 }

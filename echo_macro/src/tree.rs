@@ -19,6 +19,7 @@ mod kw {
     syn::custom_keyword!(BIND);
     syn::custom_keyword!(BODY);
     syn::custom_keyword!(ARGS);
+    syn::custom_keyword!(STATE);
 }
 
 pub struct Block {
@@ -47,6 +48,7 @@ pub enum BlockElem {
         arms: Vec<(Pat, Block)>,
     },
     Body(Punctuated<Expr, Token![,]>),
+    State(Ident, TokenStream),
     // Bind(Ident),
 }
 pub struct IfElem {
@@ -144,6 +146,17 @@ impl Parse for BlockElem {
             let inner;
             parenthesized!(inner in input);
             let elem = BlockElem::On(Punctuated::parse_terminated(&inner)?);
+            input.parse::<Token![;]>()?;
+            Ok(elem)
+            //
+        } else if input.peek(kw::STATE) {
+            input.parse::<kw::STATE>()?;
+            let inner;
+            parenthesized!(inner in input);
+            let name = inner.parse()?;
+            inner.parse::<Token![=]>()?;
+            let value = inner.parse()?;
+            let elem = BlockElem::State(name, value);
             input.parse::<Token![;]>()?;
             Ok(elem)
             //
@@ -367,6 +380,11 @@ pub fn gen_block(block: Block) -> TokenStream {
                         __builder = __builder.__signal(stringify!(#name), #value);
                     });
                 }
+            }
+            BlockElem::State(name, init) => {
+                out.extend(quote! {
+                    (__builder, #name) = __builder.__state(#init);
+                });
             }
             BlockElem::Code(block) => {
                 out.extend(quote! { #block });

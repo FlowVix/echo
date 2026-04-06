@@ -103,6 +103,31 @@ impl<P: Inherits<Node>> Builder<P> {
     }
     #[inline]
     #[doc(hidden)]
+    pub fn __state<T: 'static>(mut self, init: impl FnOnce() -> T) -> (Self, Rc<RefCell<T>>) {
+        self.path.push(PathElem::Inc(self.next_push));
+        self.next_push += 1;
+
+        let mut ctx_b = self.ctx.borrow_mut();
+
+        let cached_total_id = ahash::RandomState::with_seeds(1, 2, 3, 4).hash_one(&self.path);
+        ctx_b.used_ids.insert(cached_total_id);
+
+        let val = match ctx_b.state_map.get(&cached_total_id) {
+            Some(existing) => existing.downcast_ref::<Rc<RefCell<T>>>().unwrap().clone(),
+            None => {
+                let val = Rc::new(RefCell::new(init()));
+                ctx_b
+                    .state_map
+                    .insert(cached_total_id, Box::new(val.clone()));
+                val
+            }
+        };
+        drop(ctx_b);
+
+        (self, val)
+    }
+    #[inline]
+    #[doc(hidden)]
     pub fn __under_explicit(mut self, id: impl Hash, cb: impl FnOnce(Self) -> Self) -> Self {
         let mut path = self.path;
         path.push(PathElem::Hash(
