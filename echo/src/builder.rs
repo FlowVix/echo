@@ -124,6 +124,8 @@ impl<P: Inherits<Node>> Builder<P> {
         };
         drop(ctx_b);
 
+        self.path.pop();
+
         (self, val)
     }
     #[inline]
