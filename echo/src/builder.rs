@@ -354,6 +354,10 @@ impl<P: Inherits<Node>> Builder<P> {
     pub fn init(&self) -> bool {
         self.new
     }
+    #[inline]
+    pub fn forcing_memos(&self) -> bool {
+        self.ctx.borrow().force_memo
+    }
 }
 
 impl<P: Inherits<Control> + Inherits<Node>> Builder<P> {
