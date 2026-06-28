@@ -1,3 +1,4 @@
+use ahash::{AHashSet, HashSetExt};
 use std::{
     any::Any,
     cell::RefCell,
@@ -14,10 +15,11 @@ use godot::{
     obj::{Gd, Inherits, NewAlloc, WithSignals},
     prelude::*,
 };
+use nohash_hasher::IntSet;
 use smallbox::SmallBox;
 use smallvec::{SmallVec, smallvec};
 
-use crate::app::{Context, MapItem};
+use crate::app::{Context, MapItem, MemoItem};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PathElem {
@@ -33,6 +35,7 @@ pub struct Builder<P: Inherits<Node>> {
     pub(crate) cached_total_id: u64,
     pub(crate) new: bool,
     pub(crate) ctx: Rc<RefCell<Context>>,
+    pub(crate) memo_stack: Vec<MemoItem>,
 }
 
 impl<P: Inherits<Node>> Builder<P> {
@@ -54,6 +57,9 @@ impl<P: Inherits<Node>> Builder<P> {
 
         let cached_total_id = ahash::RandomState::with_seeds(1, 2, 3, 4).hash_one(&path);
         ctx_b.used_ids.insert(cached_total_id);
+        for m in &mut self.memo_stack {
+            m.retain_ids.insert(cached_total_id);
+        }
 
         let child_b = match ctx_b.map.get(&cached_total_id) {
             Some(existing) => {
@@ -68,6 +74,7 @@ impl<P: Inherits<Node>> Builder<P> {
                     cached_total_id,
                     new: false,
                     ctx: self.ctx.clone(),
+                    memo_stack: self.memo_stack,
                 }
             }
             None => {
@@ -90,6 +97,7 @@ impl<P: Inherits<Node>> Builder<P> {
                     cached_total_id,
                     new: true,
                     ctx: self.ctx.clone(),
+                    memo_stack: self.memo_stack,
                 }
             }
         };
@@ -99,6 +107,7 @@ impl<P: Inherits<Node>> Builder<P> {
         child_b.path.pop();
 
         self.path = child_b.path;
+        self.memo_stack = child_b.memo_stack;
         self
     }
     #[inline]
@@ -111,6 +120,9 @@ impl<P: Inherits<Node>> Builder<P> {
 
         let cached_total_id = ahash::RandomState::with_seeds(1, 2, 3, 4).hash_one(&self.path);
         ctx_b.used_ids.insert(cached_total_id);
+        for m in &mut self.memo_stack {
+            m.retain_ids.insert(cached_total_id);
+        }
 
         let val = match ctx_b.state_map.get(&cached_total_id) {
             Some(existing) => existing.downcast_ref::<Rc<RefCell<T>>>().unwrap().clone(),
@@ -127,6 +139,81 @@ impl<P: Inherits<Node>> Builder<P> {
         self.path.pop();
 
         (self, val)
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn __memo<T: PartialEq + 'static>(
+        mut self,
+        value: T,
+        cb: impl FnOnce(Self) -> Self,
+    ) -> Self {
+        let mut path = self.path;
+        path.push(PathElem::Inc(self.next_push));
+        self.next_push += 1;
+
+        let mut ctx_b = self.ctx.borrow_mut();
+
+        let cached_total_id = ahash::RandomState::with_seeds(1, 2, 3, 4).hash_one(&path);
+        ctx_b.used_ids.insert(cached_total_id);
+        for m in &mut self.memo_stack {
+            m.retain_ids.insert(cached_total_id);
+        }
+
+        if ctx_b
+            .memo_map
+            .get(&cached_total_id)
+            .is_none_or(|v| v.value.downcast_ref::<T>().unwrap() != &value)
+        {
+            drop(ctx_b);
+            self.memo_stack.push(MemoItem {
+                value: Box::new(value),
+                retain_ids: IntSet::new(),
+                retain_signals: AHashSet::new(),
+            });
+            let mut inner_b = cb(Builder {
+                node: self.node,
+                next_idx: self.next_idx,
+                next_push: 0,
+                path,
+                cached_total_id,
+                new: self.new,
+                ctx: self.ctx,
+                memo_stack: self.memo_stack,
+            });
+            inner_b.path.pop();
+
+            self.path = inner_b.path;
+            self.node = inner_b.node;
+            self.ctx = inner_b.ctx;
+            self.next_idx = inner_b.next_idx;
+            self.memo_stack = inner_b.memo_stack;
+
+            let mut ctx_b = self.ctx.borrow_mut();
+            ctx_b
+                .memo_map
+                .insert(cached_total_id, self.memo_stack.pop().unwrap());
+        } else {
+            drop(ctx_b);
+            self.path = path;
+        };
+        {
+            let ctx_b = &mut *self.ctx.borrow_mut();
+            let memo = &ctx_b.memo_map[&cached_total_id];
+            for i in &memo.retain_ids {
+                ctx_b.used_ids.insert(*i);
+                for m in &mut self.memo_stack {
+                    m.retain_ids.insert(*i);
+                }
+            }
+            for i in &memo.retain_signals {
+                ctx_b.used_signals.insert(*i);
+                for m in &mut self.memo_stack {
+                    m.retain_signals.insert(*i);
+                }
+            }
+        }
+
+        self
     }
     #[inline]
     #[doc(hidden)]
@@ -148,6 +235,7 @@ impl<P: Inherits<Node>> Builder<P> {
             cached_total_id,
             new: self.new,
             ctx: self.ctx,
+            memo_stack: self.memo_stack,
         });
         inner_b.path.pop();
         inner_b.path.pop();
@@ -156,6 +244,7 @@ impl<P: Inherits<Node>> Builder<P> {
         self.node = inner_b.node;
         self.ctx = inner_b.ctx;
         self.next_idx = inner_b.next_idx;
+        self.memo_stack = inner_b.memo_stack;
         self
     }
     #[inline]
@@ -170,6 +259,9 @@ impl<P: Inherits<Node>> Builder<P> {
     pub fn __signal(mut self, s: &'static str, cb: impl FnOnce(&[Variant])) -> Self {
         let mut ctx = self.ctx.borrow_mut();
         ctx.used_signals.insert((self.cached_total_id, s));
+        for m in &mut self.memo_stack {
+            m.retain_signals.insert((self.cached_total_id, s));
+        }
 
         if !ctx.map[&self.cached_total_id]
             .signals
@@ -228,6 +320,7 @@ impl<P: Inherits<Node>> Builder<P> {
             cached_total_id: self.cached_total_id,
             new: self.new,
             ctx: self.ctx,
+            memo_stack: self.memo_stack,
         }
     }
     #[inline]
@@ -243,6 +336,7 @@ impl<P: Inherits<Node>> Builder<P> {
             cached_total_id: self.cached_total_id,
             new: self.new,
             ctx: self.ctx,
+            memo_stack: self.memo_stack,
         }
     }
     #[inline]

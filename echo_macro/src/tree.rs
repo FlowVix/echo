@@ -20,6 +20,7 @@ mod kw {
     syn::custom_keyword!(BODY);
     syn::custom_keyword!(ARGS);
     syn::custom_keyword!(STATE);
+    syn::custom_keyword!(MEMO);
 }
 
 pub struct Block {
@@ -49,6 +50,10 @@ pub enum BlockElem {
     },
     Body(Punctuated<Expr, Token![,]>),
     State(Ident, TokenStream),
+    Memo {
+        value: Expr,
+        body: Block,
+    },
     // Bind(Ident),
 }
 pub struct IfElem {
@@ -157,6 +162,21 @@ impl Parse for BlockElem {
             inner.parse::<Token![=]>()?;
             let value = inner.parse()?;
             let elem = BlockElem::State(name, value);
+            input.parse::<Token![;]>()?;
+            Ok(elem)
+            //
+        } else if input.peek(kw::MEMO) {
+            input.parse::<kw::MEMO>()?;
+            let inner;
+            parenthesized!(inner in input);
+            let value = inner.parse()?;
+            input.parse::<Token![>>]>()?;
+            let inner;
+            braced!(inner in input);
+            let elem = BlockElem::Memo {
+                value,
+                body: inner.parse()?,
+            };
             input.parse::<Token![;]>()?;
             Ok(elem)
             //
@@ -482,7 +502,6 @@ pub fn gen_block(block: Block) -> TokenStream {
                         });
                     }
                 });
-                //
             }
             BlockElem::Body(mut args) => {
                 if !args.empty_or_trailing() {
@@ -509,6 +528,14 @@ pub fn gen_block(block: Block) -> TokenStream {
                     __builder = match #value {
                         #inner
                     };
+                });
+            }
+            BlockElem::Memo { value, body } => {
+                let body = gen_block(body);
+                out.extend(quote! {
+                    __builder = __builder.__memo(#value, |mut __builder| {
+                        #body
+                    });
                 });
             }
         }

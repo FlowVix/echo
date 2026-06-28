@@ -16,12 +16,19 @@ pub struct MapItem {
     pub(crate) signals: SmallVec<[(&'static str, Callable); 4]>,
 }
 
+pub struct MemoItem {
+    pub(crate) value: Box<dyn Any>,
+    pub(crate) retain_ids: IntSet<u64>,
+    pub(crate) retain_signals: AHashSet<(u64, &'static str)>,
+}
+
 pub struct Context {
     pub(crate) root: Gd<Node>,
     pub(crate) used_ids: IntSet<u64>,
     pub(crate) used_signals: AHashSet<(u64, &'static str)>,
     pub(crate) map: IntMap<u64, MapItem>,
     pub(crate) state_map: IntMap<u64, Box<dyn Any>>,
+    pub(crate) memo_map: IntMap<u64, MemoItem>,
     pub(crate) signal_runs: AHashMap<(Gd<Node>, &'static str), SmallVec<[Variant; 4]>>,
 }
 
@@ -43,6 +50,7 @@ impl<R: Inherits<Node>, S> App<R, S> {
                 used_ids: IntSet::new(),
                 map: IntMap::new(),
                 state_map: IntMap::new(),
+                memo_map: IntMap::new(),
                 signal_runs: AHashMap::new(),
                 root: root.clone().upcast(),
                 used_signals: AHashSet::new(),
@@ -70,6 +78,7 @@ impl<R: Inherits<Node>, S> App<R, S> {
                 next_push: 0,
                 path,
                 cached_total_id,
+                memo_stack: vec![],
             },
             state,
         );

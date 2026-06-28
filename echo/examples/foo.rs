@@ -9,14 +9,9 @@ fn foo(v: f32) {
 
 #[tree(Node2D())]
 fn bar(v: Option<f32>) {
-    match v {
-        Some(v) => {
-            Label..{
-                INIT(text = v);
-            };
-        }
-        None => {}
-    }
+    MEMO(v) >> {
+        Label..{};
+    };
 }
 
 fn main() {}
