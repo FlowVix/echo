@@ -159,10 +159,11 @@ impl<P: Inherits<Node>> Builder<P> {
             m.retain_ids.insert(cached_total_id);
         }
 
-        if ctx_b
-            .memo_map
-            .get(&cached_total_id)
-            .is_none_or(|v| v.value.downcast_ref::<T>().unwrap() != &value)
+        if ctx_b.force_memo
+            || ctx_b
+                .memo_map
+                .get(&cached_total_id)
+                .is_none_or(|v| v.value.downcast_ref::<T>().unwrap() != &value)
         {
             drop(ctx_b);
             self.memo_stack.push(MemoItem {
@@ -284,7 +285,7 @@ impl<P: Inherits<Node>> Builder<P> {
                         );
                         ctx.root.clone()
                     }
-                    .emit_signal("__echo_rerun", &[]);
+                    .emit_signal("__echo_rerun", &[true.to_variant()]);
                 },
             );
             self.node.upcast_mut().connect(s, &callable);

@@ -31,6 +31,7 @@ pub struct Context {
     pub(crate) state_map: IntMap<u64, Box<dyn Any>>,
     pub(crate) memo_map: IntMap<u64, MemoItem>,
     pub(crate) signal_runs: AHashMap<(Gd<Node>, &'static str), SmallVec<[Variant; 4]>>,
+    pub(crate) force_memo: bool,
 }
 
 pub struct App<R: Inherits<Node>, S> {
@@ -45,7 +46,13 @@ impl<R: Inherits<Node>, S> App<R, S> {
         mut root: Gd<R>,
         func: F,
     ) -> Self {
-        root.upcast_mut().add_user_signal_ex("__echo_rerun").done();
+        root.upcast_mut()
+            .add_user_signal_ex("__echo_rerun")
+            .arguments(
+                &varray![&vdict! { "name" => "force_memo", "type" => VariantType::BOOL }]
+                    .upcast_any_array(),
+            )
+            .done();
         Self {
             ctx: Rc::new(RefCell::new(Context {
                 used_ids: IntSet::new(),
@@ -55,17 +62,19 @@ impl<R: Inherits<Node>, S> App<R, S> {
                 signal_runs: AHashMap::new(),
                 root: root.clone().upcast(),
                 used_signals: AHashSet::new(),
+                force_memo: false,
             })),
             root,
             func: Box::new(func),
             ran: false,
         }
     }
-    pub fn run(&mut self, state: &mut S) {
+    pub fn run(&mut self, state: &mut S, force_memo: bool) {
         {
             let ctx = &mut *self.ctx.borrow_mut();
             ctx.used_ids.clear();
             ctx.used_signals.clear();
+            ctx.force_memo = force_memo;
         }
         let path = smallvec![];
         let cached_total_id = ahash::RandomState::with_seeds(1, 2, 3, 4).hash_one(&path);
