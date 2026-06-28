@@ -169,6 +169,7 @@ impl<P: Inherits<Node>> Builder<P> {
                 value: Box::new(value),
                 retain_ids: IntSet::new(),
                 retain_signals: AHashSet::new(),
+                next_idx: 0,
             });
             let mut inner_b = cb(Builder {
                 node: self.node,
@@ -185,20 +186,21 @@ impl<P: Inherits<Node>> Builder<P> {
             self.path = inner_b.path;
             self.node = inner_b.node;
             self.ctx = inner_b.ctx;
-            self.next_idx = inner_b.next_idx;
             self.memo_stack = inner_b.memo_stack;
 
+            let mut memo = self.memo_stack.pop().unwrap();
+            memo.next_idx = inner_b.next_idx;
             let mut ctx_b = self.ctx.borrow_mut();
-            ctx_b
-                .memo_map
-                .insert(cached_total_id, self.memo_stack.pop().unwrap());
+            ctx_b.memo_map.insert(cached_total_id, memo);
         } else {
             drop(ctx_b);
             self.path = path;
+            self.path.pop();
         };
         {
             let ctx_b = &mut *self.ctx.borrow_mut();
             let memo = &ctx_b.memo_map[&cached_total_id];
+            self.next_idx = memo.next_idx;
             for i in &memo.retain_ids {
                 ctx_b.used_ids.insert(*i);
                 for m in &mut self.memo_stack {
@@ -219,8 +221,8 @@ impl<P: Inherits<Node>> Builder<P> {
     #[doc(hidden)]
     pub fn __under_explicit(mut self, id: impl Hash, cb: impl FnOnce(Self) -> Self) -> Self {
         let mut path = self.path;
-        path.push(PathElem::Inc(self.next_push));
-        self.next_push += 1;
+        // path.push(PathElem::Inc(self.next_push));
+        // self.next_push += 1;
         path.push(PathElem::Hash(
             ahash::RandomState::with_seeds(1, 2, 3, 4).hash_one(&id),
         ));
@@ -237,7 +239,7 @@ impl<P: Inherits<Node>> Builder<P> {
             ctx: self.ctx,
             memo_stack: self.memo_stack,
         });
-        inner_b.path.pop();
+        // inner_b.path.pop();
         inner_b.path.pop();
 
         self.path = inner_b.path;

@@ -20,6 +20,7 @@ pub struct MemoItem {
     pub(crate) value: Box<dyn Any>,
     pub(crate) retain_ids: IntSet<u64>,
     pub(crate) retain_signals: AHashSet<(u64, &'static str)>,
+    pub(crate) next_idx: i32,
 }
 
 pub struct Context {
@@ -98,7 +99,8 @@ impl<R: Inherits<Node>, S> App<R, S> {
                 false
             }
         });
-        ctx.state_map.retain(|k, item| ctx.used_ids.contains(k));
+        ctx.state_map.retain(|k, _| ctx.used_ids.contains(k));
+        ctx.memo_map.retain(|k, _| ctx.used_ids.contains(k));
         ctx.signal_runs.clear();
     }
 }
