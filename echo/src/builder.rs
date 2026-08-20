@@ -227,8 +227,14 @@ impl<P: Inherits<Node>> Builder<P> {
         path.push(PathElem::Hash(
             ahash::RandomState::with_seeds(1, 2, 3, 4).hash_one(&id),
         ));
+        
+        let mut ctx_b = self.ctx.borrow_mut();
 
         let cached_total_id = ahash::RandomState::with_seeds(1, 2, 3, 4).hash_one(&path);
+        ctx_b.used_ids.insert(cached_total_id);
+        for m in &mut self.memo_stack {
+            m.retain_ids.insert(cached_total_id);
+        }
 
         let mut inner_b = cb(Builder {
             node: self.node,
