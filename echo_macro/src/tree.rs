@@ -480,7 +480,10 @@ pub fn gen_block(block: Block) -> TokenStream {
                             } });
                         }
                         None => {
-                            out.extend(quote! { else { __builder } });
+                            idx += 1;
+                            out.extend(quote! { else {
+                                __builder.__under_explicit(#idx, |mut __builder| __builder)
+                            } });
                         }
                     }
                 }
