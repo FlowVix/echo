@@ -236,6 +236,8 @@ impl<P: Inherits<Node>> Builder<P> {
             m.retain_ids.insert(cached_total_id);
         }
 
+        drop(ctx_b);
+
         let mut inner_b = cb(Builder {
             node: self.node,
             next_idx: self.next_idx,
