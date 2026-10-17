@@ -1,17 +1,14 @@
-use echo::tree;
-use godot::classes::{Button, Control, Label, VBoxContainer};
-use godot::prelude::*;
+use std::cell::RefCell;
 
-#[tree(Node(i32, f32))]
-fn foo(v: f32) {
-    BODY(69, 1.0);
-}
+use echo::tree;
+use godot::prelude::*;
 
 #[tree(Node2D())]
 fn bar(v: Option<f32>) {
-    MEMO(v) >> {
-        Label..{};
-    };
+    STATE(lol = || 69);
+    {
+        // lol.borrow_mut().push(69);
+    }
 }
 
 fn main() {}

@@ -27,6 +27,24 @@ pub enum PathElem {
     Hash(u64),
 }
 
+// /// <img src="https://media.tenor.com/SFzOgY7JNRcAAAAe/do-you-really-mean-that-do-you-really-mean-that-cat.png"/>
+#[doc(hidden)]
+pub struct __Probe<'a, T>(pub &'a T);
+impl<'a, T: Copy> __Probe<'a, Rc<RefCell<T>>> {
+    #[deprecated(
+        note = "\n\nvalue of this state is `Copy` so, It might be better to do STATE(*foo = /* etc */) which uses `Cell`.\nIf u still want `RefCell`, do STATE(&foo = /* etc */)"
+    )]
+    pub fn check(&self) {}
+}
+#[doc(hidden)]
+pub trait __ProbeFallback {
+    fn check(&self) {}
+}
+impl<'a, T> __ProbeFallback for __Probe<'a, T> {}
+
+// pub trait ProbeFallback { fn check(&self) {} }
+// impl<T> ProbeFallback for Probe<T> {}
+
 pub struct Builder<P: Inherits<Node>> {
     pub(crate) node: Gd<P>,
     pub(crate) next_idx: i32,
@@ -64,8 +82,13 @@ impl<P: Inherits<Node>> Builder<P> {
         let child_b = match ctx_b.map.get(&cached_total_id) {
             Some(existing) => {
                 let existing = existing.node.clone().cast::<C>();
-                self.node.upcast_mut().move_child(&existing, self.next_idx);
-                self.next_idx = existing.upcast_ref().get_index() + 1;
+                let existing_idx = existing.upcast_ref().get_index();
+                if existing_idx != self.next_idx {
+                    self.node.upcast_mut().move_child(&existing, self.next_idx);
+                    self.next_idx = existing.upcast_ref().get_index() + 1;
+                } else {
+                    self.next_idx = existing_idx + 1;
+                }
                 Builder {
                     node: existing,
                     next_idx: 0,
@@ -112,7 +135,7 @@ impl<P: Inherits<Node>> Builder<P> {
     }
     #[inline]
     #[doc(hidden)]
-    pub fn __state<T: 'static>(mut self, init: impl FnOnce() -> T) -> (Self, Rc<RefCell<T>>) {
+    pub fn __state<T: 'static>(mut self, init: impl FnOnce() -> T) -> (Self, Rc<T>) {
         self.path.push(PathElem::Inc(self.next_push));
         self.next_push += 1;
 
@@ -125,9 +148,9 @@ impl<P: Inherits<Node>> Builder<P> {
         }
 
         let val = match ctx_b.state_map.get(&cached_total_id) {
-            Some(existing) => existing.downcast_ref::<Rc<RefCell<T>>>().unwrap().clone(),
+            Some(existing) => existing.downcast_ref::<Rc<T>>().unwrap().clone(),
             None => {
-                let val = Rc::new(RefCell::new(init()));
+                let val = Rc::new(init());
                 ctx_b
                     .state_map
                     .insert(cached_total_id, Box::new(val.clone()));
@@ -227,7 +250,7 @@ impl<P: Inherits<Node>> Builder<P> {
         path.push(PathElem::Hash(
             ahash::RandomState::with_seeds(1, 2, 3, 4).hash_one(&id),
         ));
-        
+
         let mut ctx_b = self.ctx.borrow_mut();
 
         let cached_total_id = ahash::RandomState::with_seeds(1, 2, 3, 4).hash_one(&path);

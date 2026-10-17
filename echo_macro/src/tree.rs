@@ -49,7 +49,11 @@ pub enum BlockElem {
         arms: Vec<(Pat, Block)>,
     },
     Body(Punctuated<Expr, Token![,]>),
-    State(Ident, TokenStream),
+    State {
+        cell: Option<Either<Token![*], Token![&]>>,
+        name: Ident,
+        init: TokenStream,
+    },
     Memo {
         value: Expr,
         body: Block,
@@ -158,10 +162,21 @@ impl Parse for BlockElem {
             input.parse::<kw::STATE>()?;
             let inner;
             parenthesized!(inner in input);
+            let cell = if inner.peek(Token![*]) {
+                Some(Either::Left(inner.parse::<Token![*]>()?))
+            } else if inner.peek(Token![&]) {
+                Some(Either::Right(inner.parse::<Token![&]>()?))
+            } else {
+                None
+            };
             let name = inner.parse()?;
             inner.parse::<Token![=]>()?;
             let value = inner.parse()?;
-            let elem = BlockElem::State(name, value);
+            let elem = BlockElem::State {
+                cell,
+                name,
+                init: value,
+            };
             input.parse::<Token![;]>()?;
             Ok(elem)
             //
@@ -401,9 +416,24 @@ pub fn gen_block(block: Block) -> TokenStream {
                     });
                 }
             }
-            BlockElem::State(name, init) => {
+            BlockElem::State { cell, name, init } => {
+                let check = format_ident!("check", span = name.span());
+                let (wrap, probe) = match cell {
+                    Some(Either::Left(_)) => (quote! {std::cell::Cell::new}, quote! {}),
+                    Some(Either::Right(_)) => (quote! {std::cell::RefCell::new}, quote! {}),
+                    None => (
+                        quote! {std::cell::RefCell::new},
+                        quote! {
+                            {
+                                use ::echo::__ProbeFallback as _;
+                                ::echo::__Probe(&#name).#check();
+                            }
+                        },
+                    ),
+                };
                 out.extend(quote! {
-                    let (__new_builder, #name) = __builder.__state(#init);
+                    let (__new_builder, #name) = __builder.__state(|| #wrap((#init)()));
+                    #probe
                     __builder = __new_builder;
                 });
             }
