@@ -384,6 +384,7 @@ pub fn gen_block(block: Block) -> TokenStream {
             BlockElem::Node { name, body } => {
                 let body = gen_block(body);
                 out.extend(quote! {
+                    crate::__echo_deny!(#name);
                     __builder = __builder.__child::<#name>(|mut __builder| {
                         #body
                     });
