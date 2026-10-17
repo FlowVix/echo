@@ -432,7 +432,8 @@ pub fn gen_block(block: Block) -> TokenStream {
                     ),
                 };
                 out.extend(quote! {
-                    let (__new_builder, #name) = __builder.__state(|| #wrap({#init}()));
+                    let _id = |v| v;
+                    let (__new_builder, #name) = __builder.__state(|| #wrap(_id(#init)()));
                     #probe
                     __builder = __new_builder;
                 });
