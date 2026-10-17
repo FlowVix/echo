@@ -364,6 +364,7 @@ impl Parse for Block {
 
 pub fn gen_block(block: Block) -> TokenStream {
     let mut out = quote! {};
+    let mut probes = vec![];
     for i in block.elems {
         let gen_init_or_update = |i: Assignment| -> TokenStream {
             let name = i.name;
@@ -417,19 +418,20 @@ pub fn gen_block(block: Block) -> TokenStream {
                 }
             }
             BlockElem::State { cell, name, init } => {
-                let check = format_ident!("check", span = name.span());
                 let (wrap, probe) = match cell {
-                    Some(Either::Left(_)) => (quote! {std::cell::Cell::new}, quote! {}),
-                    Some(Either::Right(_)) => (quote! {std::cell::RefCell::new}, quote! {}),
-                    None => (
-                        quote! {std::cell::RefCell::new},
-                        quote! {
-                            {
-                                use ::echo::__ProbeFallback as _;
-                                ::echo::__Probe(&#name).#check();
-                            }
-                        },
-                    ),
+                    Some(Either::Left(_)) => (quote! {std::cell::Cell::new}, false),
+                    Some(Either::Right(_)) => (quote! {std::cell::RefCell::new}, false),
+                    None => (quote! {std::cell::RefCell::new}, true),
+                };
+                let probe = if probe {
+                    let id = format_ident!("__probe_{}", probes.len(), span = name.span());
+                    let out = quote! {
+                        let #id = #name.clone();
+                    };
+                    probes.push(id);
+                    out
+                } else {
+                    quote! {}
                 };
                 out.extend(quote! {
                     let _id = |v| v;
@@ -573,6 +575,15 @@ pub fn gen_block(block: Block) -> TokenStream {
                 });
             }
         }
+    }
+    for i in probes {
+        let check = format_ident!("check", span = i.span());
+        out.extend(quote! {
+            {
+                use ::echo::__ProbeFallback as _;
+                ::echo::__Probe(&#i).#check();
+            }
+        });
     }
     out.extend(quote! { __builder });
     out
