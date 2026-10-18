@@ -41,6 +41,7 @@ impl Parse for RawFn {
 struct TreeAttr {
     btype: Path,
     args: Punctuated<Type, Token![,]>,
+    usability: Option<Path>,
 }
 impl Parse for TreeAttr {
     fn parse(input: ParseStream) -> Result<Self> {
@@ -48,7 +49,18 @@ impl Parse for TreeAttr {
         let inner;
         parenthesized!(inner in input);
         let args = Punctuated::parse_terminated(&inner)?;
-        Ok(TreeAttr { btype, args })
+        let usability = input
+            .peek(Token![in])
+            .then(|| {
+                input.parse::<Token![in]>()?;
+                input.parse()
+            })
+            .transpose()?;
+        Ok(TreeAttr {
+            btype,
+            args,
+            usability,
+        })
     }
 }
 
@@ -57,20 +69,27 @@ pub fn tree(
     attr: proc_macro::TokenStream,
     item: proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
-    let TreeAttr { btype, mut args } = parse_macro_input!(attr as TreeAttr);
+    let TreeAttr {
+        btype,
+        mut args,
+        usability,
+    } = parse_macro_input!(attr as TreeAttr);
     if !args.empty_or_trailing() {
         args.push_punct(parse_quote! {,});
     }
     let mut func = parse_macro_input!(item as RawFn);
 
     let has_self = !func.sig.inputs.is_empty() && matches!(func.sig.inputs[0], FnArg::Receiver(_));
+    let usability = usability
+        .map(|v| quote! { #v })
+        .unwrap_or(quote! { ::godot::classes::Node });
     func.sig.inputs.insert(
         if has_self { 1 } else { 0 },
         FnArg::Typed(PatType {
             attrs: vec![],
             pat: parse_quote!(mut __builder),
             colon_token: parse_quote!(:),
-            ty: parse_quote!(::echo::Builder<::godot::classes::Node>),
+            ty: parse_quote!(::echo::Builder<#usability>),
         }),
     );
     func.sig.inputs.push(FnArg::Typed(PatType {
@@ -79,7 +98,7 @@ pub fn tree(
         colon_token: parse_quote!(:),
         ty: parse_quote!(&mut dyn FnMut(::echo::Builder<#btype>, (#args)) -> ::echo::Builder<#btype>),
     }));
-    func.sig.output = parse_quote!(-> ::echo::Builder<::godot::classes::Node>);
+    func.sig.output = parse_quote!(-> ::echo::Builder<#usability>);
 
     let attrs = func.attrs;
     let vis = func.vis;

@@ -1,22 +1,30 @@
 use std::cell::RefCell;
 
 use echo::tree;
-use godot::{classes::Button, prelude::*};
+use godot::{
+    classes::{Button, Control, PanelContainer},
+    prelude::*,
+};
 
 macro_rules! __echo_deny {
     ($($t:tt)*) => {};
 }
+pub(crate) use __echo_deny;
 
 #[tree(Node2D())]
-fn bar() -> f32 {
-    STATE(lol = || vec![1, 2]);
-    STATE(*ef = || 69);
+fn bar() {
+    Control..{
+        PanelContainer..{
+            foo()..{};
+        };
+        //
+    };
+}
+#[tree(Control() in PanelContainer)]
+fn foo() {
     {
-        lol.borrow_mut().push(69);
+        let n = __builder.node();
     }
-    // Button..{
-    //     //
-    // };
 }
 
 fn main() {}
