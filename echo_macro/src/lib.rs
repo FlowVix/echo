@@ -6,7 +6,6 @@ use syn::{
     parse::{Parse, ParseStream},
     parse_macro_input, parse_quote,
     punctuated::Punctuated,
-    spanned::Spanned,
 };
 
 use crate::tree::{Block, gen_block};
@@ -40,17 +39,12 @@ impl Parse for RawFn {
 }
 
 struct TreeAttr {
-    once: Option<Token![move]>,
     btype: Path,
     args: Punctuated<Type, Token![,]>,
     usability: Option<Path>,
 }
 impl Parse for TreeAttr {
     fn parse(input: ParseStream) -> Result<Self> {
-        let once = input
-            .peek(Token![move])
-            .then(|| input.parse::<Token![move]>())
-            .transpose()?;
         let btype = input.parse()?;
         let inner;
         parenthesized!(inner in input);
@@ -63,7 +57,6 @@ impl Parse for TreeAttr {
             })
             .transpose()?;
         Ok(TreeAttr {
-            once,
             btype,
             args,
             usability,
@@ -80,7 +73,6 @@ pub fn tree(
         btype,
         mut args,
         usability,
-        once,
     } = parse_macro_input!(attr as TreeAttr);
     if !args.empty_or_trailing() {
         args.push_punct(parse_quote! {,});
@@ -91,12 +83,6 @@ pub fn tree(
     let usability = usability
         .map(|v| quote! { #v })
         .unwrap_or(quote! { ::godot::classes::Node });
-    let fntype = if let Some(once) = once {
-        quote! {FnOnce}
-    } else {
-        quote! {FnMut}
-    };
-    let bodyspan = btype.span();
     func.sig.inputs.insert(
         if has_self { 1 } else { 0 },
         FnArg::Typed(PatType {
@@ -106,12 +92,11 @@ pub fn tree(
             ty: parse_quote!(::echo::Builder<#usability>),
         }),
     );
-    let bodyident = Ident::new("__body", bodyspan);
     func.sig.inputs.push(FnArg::Typed(PatType {
         attrs: vec![],
-        pat: parse_quote!(mut #bodyident),
+        pat: parse_quote!(__body),
         colon_token: parse_quote!(:),
-        ty: parse_quote!(impl #fntype(::echo::Builder<#btype>, (#args)) -> ::echo::Builder<#btype>),
+        ty: parse_quote!(&mut dyn FnMut(::echo::Builder<#btype>, (#args)) -> ::echo::Builder<#btype>),
     }));
     func.sig.output = parse_quote!(-> ::echo::Builder<#usability>);
 
@@ -121,7 +106,7 @@ pub fn tree(
     let body = func.body;
 
     let block: Block = syn::parse2::<Block>(body).unwrap();
-    let block = gen_block(block, &bodyident);
+    let block = gen_block(block);
 
     // body is still raw tokens here
     let out: TokenStream = quote! {
