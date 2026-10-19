@@ -25,6 +25,9 @@ fn foo() {
     {
         let n = __builder.node();
     }
+    BODY();
+    BODY();
+    BODY();
 }
 
 fn main() {}

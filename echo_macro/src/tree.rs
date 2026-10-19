@@ -48,7 +48,10 @@ pub enum BlockElem {
         value: Expr,
         arms: Vec<(Pat, Block)>,
     },
-    Body(Punctuated<Expr, Token![,]>),
+    Body {
+        kw: kw::BODY,
+        args: Punctuated<Expr, Token![,]>,
+    },
     State {
         cell: Option<Either<Token![*], Token![&]>>,
         name: Ident,
@@ -206,12 +209,12 @@ impl Parse for BlockElem {
         //     //
         // }
         else if input.peek(kw::BODY) {
-            input.parse::<kw::BODY>()?;
+            let kw = input.parse::<kw::BODY>()?;
             let inner;
             parenthesized!(inner in input);
             let args = Punctuated::parse_terminated(&inner)?;
             input.parse::<Token![;]>()?;
-            Ok(BlockElem::Body(args))
+            Ok(BlockElem::Body { kw, args })
             //
         } else if input.peek(token::Brace) {
             let inner;
@@ -362,7 +365,7 @@ impl Parse for Block {
     }
 }
 
-pub fn gen_block(block: Block) -> TokenStream {
+pub fn gen_block(block: Block, bodyparam: &Ident) -> TokenStream {
     let mut out = quote! {};
     let mut probes = vec![];
     for i in block.elems {
@@ -382,7 +385,7 @@ pub fn gen_block(block: Block) -> TokenStream {
         };
         match i {
             BlockElem::Node { name, body } => {
-                let body = gen_block(body);
+                let body = gen_block(body, bodyparam);
                 out.extend(quote! {
                     crate::__echo_deny!(#name);
                     __builder = __builder.__child::<#name>(|mut __builder| {
@@ -445,7 +448,7 @@ pub fn gen_block(block: Block) -> TokenStream {
                 out.extend(quote! { #block });
             }
             BlockElem::Call(mut expr_call, args, block) => {
-                let block = gen_block(block);
+                let block = gen_block(block, bodyparam);
                 let args = args
                     .map(|mut args| {
                         if !args.empty_or_trailing() {
@@ -455,7 +458,7 @@ pub fn gen_block(block: Block) -> TokenStream {
                     })
                     .unwrap_or_else(|| quote! {_});
                 expr_call.args.push(
-                    parse_quote_spanned!(expr_call.func.span() => &mut |mut __builder, #args| {
+                    parse_quote_spanned!(expr_call.func.span() => |mut __builder, #args| {
                         #block
                     }),
                 );
@@ -464,7 +467,7 @@ pub fn gen_block(block: Block) -> TokenStream {
                 });
             }
             BlockElem::MethodCall(mut expr_method_call, args, block) => {
-                let block = gen_block(block);
+                let block = gen_block(block, bodyparam);
                 let args = args
                     .map(|mut args| {
                         if !args.empty_or_trailing() {
@@ -490,7 +493,7 @@ pub fn gen_block(block: Block) -> TokenStream {
                 });
                 while let Some(if_elem) = current.take() {
                     let cond = if_elem.cond;
-                    let body = gen_block(if_elem.body);
+                    let body = gen_block(if_elem.body, bodyparam);
                     out.extend(quote! {
                         if #cond {
                             __builder.__under_explicit(#idx, |mut __builder| {
@@ -506,7 +509,7 @@ pub fn gen_block(block: Block) -> TokenStream {
                         }
                         Some(Right(remaining)) => {
                             idx += 1;
-                            let body = gen_block(remaining);
+                            let body = gen_block(remaining, bodyparam);
                             out.extend(quote! { else {
                                 __builder.__under_explicit(#idx, |mut __builder| {
                                     #body
@@ -531,7 +534,7 @@ pub fn gen_block(block: Block) -> TokenStream {
                 key,
                 body,
             } => {
-                let body = gen_block(body);
+                let body = gen_block(body, bodyparam);
                 out.extend(quote! {
                     for #pat in #iter {
                         __builder = __builder.__under_explicit(#key, |mut __builder| {
@@ -540,18 +543,19 @@ pub fn gen_block(block: Block) -> TokenStream {
                     }
                 });
             }
-            BlockElem::Body(mut args) => {
+            BlockElem::Body { kw, mut args } => {
                 if !args.empty_or_trailing() {
                     args.push_punct(parse_quote! {,});
                 }
+                let bodyarg = Ident::new("__body", kw.span);
                 out.extend(quote! {
-                    __builder = __body(__builder.upcast(), (#args)).cast();
+                    __builder = #bodyarg(__builder.upcast(), (#args)).cast();
                 });
             }
             BlockElem::Match { value, arms } => {
                 let mut inner = quote! {};
                 for (idx, (pat, block)) in arms.into_iter().enumerate() {
-                    let body = gen_block(block);
+                    let body = gen_block(block, bodyparam);
                     let idx = idx as u64;
                     inner.extend(quote! {
                         #pat => {
@@ -568,7 +572,7 @@ pub fn gen_block(block: Block) -> TokenStream {
                 });
             }
             BlockElem::Memo { value, body } => {
-                let body = gen_block(body);
+                let body = gen_block(body, bodyparam);
                 out.extend(quote! {
                     __builder = __builder.__memo(#value, |mut __builder| {
                         #body
